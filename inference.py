@@ -1,18 +1,23 @@
 """Z-Image PyTorch Native Inference."""
 
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+import sys
+project_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(project_dir)
+sys.path.append(os.path.join(project_dir, "src"))
 import time
 import warnings
 
 import torch
 
 warnings.filterwarnings("ignore")
-from utils import AttentionBackend, ensure_model_weights, load_from_local_dir, set_attention_backend
-from zimage import generate
+from src.utils import AttentionBackend, ensure_model_weights, load_from_local_dir, set_attention_backend
+from src.zimage import generate
 
 
 def main():
-    model_path = ensure_model_weights("ckpts/Z-Image-Turbo", verify=False)  # True to verify with md5
+    model_path = ensure_model_weights("/home/dbt/xmx/ai-toolkit/models/z_image_turbo", verify=False)  # True to verify with md5
     dtype = torch.bfloat16
     compile = False  # default False for compatibility
     output_path = "example.png"

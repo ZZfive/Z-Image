@@ -43,24 +43,24 @@ def retrieve_timesteps(
 ):
     if timesteps is not None and sigmas is not None:
         raise ValueError("Only one of `timesteps` or `sigmas` can be passed.")
-    if timesteps is not None:
+    if timesteps is not None:  # 如果用户提供了时间步序列，则使用用户提供的时间步序列
         accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
         if not accepts_timesteps:
             raise ValueError(f"The scheduler does not support custom timestep schedules.")
         scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
         timesteps = scheduler.timesteps
         num_inference_steps = len(timesteps)
-    elif sigmas is not None:
+    elif sigmas is not None:  # 如果用户提供了sigma序列，则使用用户提供的sigma序列
         accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
         if not accept_sigmas:
             raise ValueError(f"The scheduler does not support custom sigmas schedules.")
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
+        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)  # 基于sigma序列设置对应时间步序列，适合需要精细控制噪声调度的场景
         timesteps = scheduler.timesteps
         num_inference_steps = len(timesteps)
-    else:
+    else:  # 自动生成
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
+    return timesteps, num_inference_steps  # 返回时间步序列和采样步数
 
 
 @torch.no_grad()
@@ -131,11 +131,11 @@ def generate(
         input_ids=text_input_ids,
         attention_mask=prompt_masks,
         output_hidden_states=True,
-    ).hidden_states[-2]
+    ).hidden_states[-2]  # 使用倒数第二层隐藏状态作为文本特征 [1,512,2560]
 
     prompt_embeds_list = []
     for i in range(len(prompt_embeds)):
-        prompt_embeds_list.append(prompt_embeds[i][prompt_masks[i]])
+        prompt_embeds_list.append(prompt_embeds[i][prompt_masks[i]])  # 去掉padding的token，只保留有效的token 案例提示词的shape为[101,2560]
 
     negative_prompt_embeds_list = []
     if do_classifier_free_guidance:
@@ -184,19 +184,19 @@ def generate(
 
     height_latent = 2 * (int(height) // vae_scale)
     width_latent = 2 * (int(width) // vae_scale)
-    shape = (batch_size * num_images_per_prompt, transformer.in_channels, height_latent, width_latent)
+    shape = (batch_size * num_images_per_prompt, transformer.in_channels, height_latent, width_latent)  # (1,16,128,128)，后面的128是从1024算过来的
 
-    latents = torch.randn(shape, generator=generator, device=device, dtype=torch.float32)
+    latents = torch.randn(shape, generator=generator, device=device, dtype=torch.float32)  # [1,16,128,128]
 
     actual_batch_size = batch_size * num_images_per_prompt
-    image_seq_len = (latents.shape[2] // 2) * (latents.shape[3] // 2)
+    image_seq_len = (latents.shape[2] // 2) * (latents.shape[3] // 2)  # 图片latent分patch后，空间维度拉直后的长度：128 // 2 * 128 // 2 = 4096
 
-    mu = calculate_shift(
-        image_seq_len,
-        scheduler.config.get("base_image_seq_len", 256),
-        scheduler.config.get("max_image_seq_len", 4096),
-        scheduler.config.get("base_shift", 0.5),
-        scheduler.config.get("max_shift", 1.15),
+    mu = calculate_shift(  # 计算时间步偏移参数，根据分辨率动态调整采样时间步的分布
+        image_seq_len,  #  当前图像对应的序列长度
+        scheduler.config.get("base_image_seq_len", 256),  # 基础序列长度
+        scheduler.config.get("max_image_seq_len", 4096),  # 最大序列长度
+        scheduler.config.get("base_shift", 0.5),  # 基础偏移量
+        scheduler.config.get("max_shift", 1.15),  # 最大偏移量
     )
     scheduler.sigma_min = 0.0
     scheduler_kwargs = {"mu": mu}
@@ -206,7 +206,7 @@ def generate(
         device,
         sigmas=None,
         **scheduler_kwargs,
-    )
+    )  # 检索出采样时间步序列
 
     logger.info(f"Sampling loop start: {num_inference_steps} steps")
 
@@ -238,17 +238,17 @@ def generate(
             prompt_embeds_model_input = prompt_embeds_list + negative_prompt_embeds_list
             timestep_model_input = timestep.repeat(2)
         else:
-            latent_model_input = latents.to(next(transformer.parameters()).dtype)
+            latent_model_input = latents.to(next(transformer.parameters()).dtype)  # 将latents转换为模型输入类型
             prompt_embeds_model_input = prompt_embeds_list
             timestep_model_input = timestep
 
-        latent_model_input = latent_model_input.unsqueeze(2)
-        latent_model_input_list = list(latent_model_input.unbind(dim=0))
+        latent_model_input = latent_model_input.unsqueeze(2)  # 在latent_model_input的第二个维度上添加一个维度，用于后续计算  [1,16,1,128,128]
+        latent_model_input_list = list(latent_model_input.unbind(dim=0))  # 将latent_model_input拆分成多个tensor，每个tensor对应一个样本 [16,1,128,128]
 
         model_out_list = transformer(
-            latent_model_input_list,
-            timestep_model_input,
-            prompt_embeds_model_input,
+            latent_model_input_list,  # 图片latent序列
+            timestep_model_input,  # 时间步
+            prompt_embeds_model_input,  # 文本特征序列
         )[0]
 
         if apply_cfg:
@@ -269,10 +269,10 @@ def generate(
                 noise_pred.append(pred)
             noise_pred = torch.stack(noise_pred, dim=0)
         else:
-            noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)
+            noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)  # [1,16,1,128,128]
 
-        noise_pred = -noise_pred.squeeze(2)
-        latents = scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]
+        noise_pred = -noise_pred.squeeze(2)  # [1,16,128,128]
+        latents = scheduler.step(noise_pred.to(torch.float32), t, latents, return_dict=False)[0]  # 更新latent
         assert latents.dtype == torch.float32
 
     if output_type == "latent":

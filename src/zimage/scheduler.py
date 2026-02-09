@@ -77,29 +77,29 @@ class FlowMatchEulerDiscreteScheduler:
             if timesteps is None:
                 timesteps = np.linspace(
                     self._sigma_to_t(self.sigma_max), self._sigma_to_t(self.sigma_min), num_inference_steps + 1
-                )[:-1]
+                )[:-1]  # 生成时间步序列，范围为[sigma_max, sigma_min]
             sigmas = timesteps / self.num_train_timesteps
         else:
             sigmas = np.array(sigmas).astype(np.float32)
 
         if self.use_dynamic_shifting:
-            sigmas = self.time_shift(mu, 1.0, sigmas)
+            sigmas = self.time_shift(mu, 1.0, sigmas)  # 动态时间步偏移
         else:
-            sigmas = self.shift * sigmas / (1 + (self.shift - 1) * sigmas)
+            sigmas = self.shift * sigmas / (1 + (self.shift - 1) * sigmas)  # 静态时间步偏移
 
-        sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+        sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)  # 转换为torch.float32类型，并移动到指定设备
 
         if passed_timesteps is None:
             timesteps = sigmas * self.num_train_timesteps
         else:
             timesteps = torch.from_numpy(passed_timesteps).to(dtype=torch.float32, device=device)
 
-        sigmas = torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])
+        sigmas = torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])  # 在sigmas末尾添加一个0，用于后续计算
 
-        self.timesteps = timesteps
-        self.sigmas = sigmas
-        self._step_index = None
-        self._begin_index = None
+        self.timesteps = timesteps  # 时间步序列
+        self.sigmas = sigmas  # sigma序列
+        self._step_index = None  # 当前时间步索引
+        self._begin_index = None  # 开始时间步索引
 
     def index_for_timestep(self, timestep, schedule_timesteps=None):
         if schedule_timesteps is None:
@@ -119,14 +119,14 @@ class FlowMatchEulerDiscreteScheduler:
 
     def step(
         self,
-        model_output: torch.FloatTensor,
-        timestep: Union[float, torch.FloatTensor],
-        sample: torch.FloatTensor,
+        model_output: torch.FloatTensor,  # 当前时间步backbone预测的速度
+        timestep: Union[float, torch.FloatTensor],  # 当前时间步
+        sample: torch.FloatTensor,  # 当前时间步输入latent
         return_dict: bool = True,
         **kwargs,
     ) -> Union[SchedulerOutput, Tuple]:
         """Predict the sample at the previous timestep."""
-        if self._step_index is None:
+        if self._step_index is None:  # 如果当前时间步索引为None，则初始化时间步索引
             self._init_step_index(timestep)
 
         sample = sample.to(torch.float32)
@@ -134,8 +134,8 @@ class FlowMatchEulerDiscreteScheduler:
         sigma = self.sigmas[sigma_idx]
         sigma_next = self.sigmas[sigma_idx + 1]
 
-        dt = sigma_next - sigma
-        prev_sample = sample + dt * model_output
+        dt = sigma_next - sigma  # 计算时间步长
+        prev_sample = sample + dt * model_output  # 计算下一时间步的latent
         self._step_index += 1
         prev_sample = prev_sample.to(model_output.dtype)
 

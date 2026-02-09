@@ -310,20 +310,20 @@ class ZImageTransformer2DModel(nn.Module):
                 ZImageTransformerBlock(1000 + layer_id, dim, n_heads, n_kv_heads, norm_eps, qk_norm, modulation=True)
                 for layer_id in range(n_refiner_layers)
             ]
-        )
+        )  # 噪声细化层
 
         self.context_refiner = nn.ModuleList(
             [
                 ZImageTransformerBlock(layer_id, dim, n_heads, n_kv_heads, norm_eps, qk_norm, modulation=False)
                 for layer_id in range(n_refiner_layers)
             ]
-        )
+        )  # 上下文细化层
 
-        self.t_embedder = TimestepEmbedder(min(dim, ADALN_EMBED_DIM), mid_size=1024)
+        self.t_embedder = TimestepEmbedder(min(dim, ADALN_EMBED_DIM), mid_size=1024)  # 时间步嵌入层
         self.cap_embedder = nn.Sequential(
             RMSNorm(cap_feat_dim, eps=norm_eps),
             nn.Linear(cap_feat_dim, dim, bias=True),
-        )
+        )  # 文本特征嵌入层
 
         self.x_pad_token = nn.Parameter(torch.empty((1, dim)))
         self.cap_pad_token = nn.Parameter(torch.empty((1, dim)))
@@ -333,14 +333,14 @@ class ZImageTransformer2DModel(nn.Module):
                 ZImageTransformerBlock(layer_id, dim, n_heads, n_kv_heads, norm_eps, qk_norm)
                 for layer_id in range(n_layers)
             ]
-        )
+        )  # 主干层
 
-        head_dim = dim // n_heads
-        assert head_dim == sum(axes_dims)
+        head_dim = dim // n_heads  # 128
+        assert head_dim == sum(axes_dims)  # 32 + 48 + 48 = 128
         self.axes_dims = axes_dims
         self.axes_lens = axes_lens
 
-        self.rope_embedder = RopeEmbedder(theta=rope_theta, axes_dims=axes_dims, axes_lens=axes_lens)
+        self.rope_embedder = RopeEmbedder(theta=rope_theta, axes_dims=axes_dims, axes_lens=axes_lens)  # 位置编码嵌入层
 
     def unpatchify(self, x: List[torch.Tensor], size: List[Tuple], patch_size, f_patch_size) -> List[torch.Tensor]:
         pH = pW = patch_size
@@ -386,13 +386,13 @@ class ZImageTransformer2DModel(nn.Module):
         all_cap_feats_out = []
 
         for _, (image, cap_feat) in enumerate(zip(all_image, all_cap_feats)):
-            cap_ori_len = len(cap_feat)
-            cap_padding_len = (-cap_ori_len) % SEQ_MULTI_OF
+            cap_ori_len = len(cap_feat)  # 文本特征序列长度
+            cap_padding_len = (-cap_ori_len) % SEQ_MULTI_OF  # 文本特征序列长度对齐到SEQ_MULTI_OF的倍数，计算需要填充的token数量
             cap_padded_pos_ids = self.create_coordinate_grid(
                 size=(cap_ori_len + cap_padding_len, 1, 1),
                 start=(1, 0, 0),
                 device=device,
-            ).flatten(0, 2)
+            ).flatten(0, 2)  # 创建文本特征序列位置编码 [cap_ori_len + cap_padding_len, 3]；此处为[128,3]，因为是文本的ids，
             all_cap_pos_ids.append(cap_padded_pos_ids)
             # pad mask
             all_cap_pad_mask.append(
@@ -405,7 +405,7 @@ class ZImageTransformer2DModel(nn.Module):
                 )
                 if cap_padding_len > 0
                 else torch.zeros((cap_ori_len,), dtype=torch.bool, device=device)
-            )
+            )  # 创建文本特征序列pad mask [cap_ori_len + cap_padding_len]，表示哪些token是padding的
             # padded feature
             all_cap_feats_out.append(
                 torch.cat(
@@ -414,14 +414,14 @@ class ZImageTransformer2DModel(nn.Module):
                 )
                 if cap_padding_len > 0
                 else cap_feat
-            )
+            )  # 创建文本特征序列padded feature [cap_ori_len + cap_padding_len, 2560]
 
             C, F, H, W = image.size()
             all_image_size.append((F, H, W))
-            F_tokens, H_tokens, W_tokens = F // pF, H // pH, W // pW
+            F_tokens, H_tokens, W_tokens = F // pF, H // pH, W // pW  # 图片各维度分patch后的patch数量
 
-            image = image.view(C, F_tokens, pF, H_tokens, pH, W_tokens, pW)
-            image = image.permute(1, 3, 5, 2, 4, 6, 0).reshape(F_tokens * H_tokens * W_tokens, pF * pH * pW * C)
+            image = image.view(C, F_tokens, pF, H_tokens, pH, W_tokens, pW)  # 执行分patch动作；[16,1,1,64,2,64,2]
+            image = image.permute(1, 3, 5, 2, 4, 6, 0).reshape(F_tokens * H_tokens * W_tokens, pF * pH * pW * C)  # 将patch拉直，分patch后多出来的维度倍率与C相乘；[4096,64]
 
             image_ori_len = len(image)
             image_padding_len = (-image_ori_len) % SEQ_MULTI_OF
@@ -473,10 +473,10 @@ class ZImageTransformer2DModel(nn.Module):
 
     def forward(
         self,
-        x: List[torch.Tensor],
-        t,
-        cap_feats: List[torch.Tensor],
-        patch_size=2,
+        x: List[torch.Tensor],  # 图片latent序列
+        t,  # 时间步
+        cap_feats: List[torch.Tensor],  # 文本特征序列
+        patch_size=2,  # 图片latent分patch后的patch大小
         f_patch_size=1,
     ):
         assert patch_size in self.all_patch_size
@@ -485,53 +485,53 @@ class ZImageTransformer2DModel(nn.Module):
         bsz = len(x)
         device = x[0].device
         t = t * self.t_scale
-        t = self.t_embedder(t)
+        t = self.t_embedder(t)  # 时间步嵌入 [1,256]
 
         (
-            x,
-            cap_feats,
-            x_size,
-            x_pos_ids,
-            cap_pos_ids,
-            x_inner_pad_mask,
-            cap_inner_pad_mask,
+            x,  # 处理后的图片latent序列  [4096,64]
+            cap_feats,  # 处理后的文本特征序列 [128,2560]
+            x_size,  # 图片各维度分patch前的维度数  (1,128,128)
+            x_pos_ids,  # 图片序列位置编码 [4096,3]
+            cap_pos_ids,  # 文本特征序列位置编码 [128,3]
+            x_inner_pad_mask,  # 图片序列pad mask [4096]
+            cap_inner_pad_mask,  # 文本特征序列pad mask [128]
         ) = self.patchify_and_embed(x, cap_feats, patch_size, f_patch_size)
 
         x_item_seqlens = [len(_) for _ in x]
-        assert all(_ % SEQ_MULTI_OF == 0 for _ in x_item_seqlens)
+        assert all(_ % SEQ_MULTI_OF == 0 for _ in x_item_seqlens)  # 确保图片序列长度为SEQ_MULTI_OF的倍数
         x_max_item_seqlen = max(x_item_seqlens)
 
-        x = torch.cat(x, dim=0)
-        x = self.all_x_embedder[f"{patch_size}-{f_patch_size}"](x)
+        x = torch.cat(x, dim=0)  # batch中的所有图片latent序列拼接在一起
+        x = self.all_x_embedder[f"{patch_size}-{f_patch_size}"](x)  # 图片latent序列特征维度映射到dim维度 [4096,3840]
 
-        adaln_input = t.type_as(x)
-        x[torch.cat(x_inner_pad_mask)] = self.x_pad_token
-        x = list(x.split(x_item_seqlens, dim=0))
-        x_freqs_cis = list(self.rope_embedder(torch.cat(x_pos_ids, dim=0)).split([len(_) for _ in x_pos_ids], dim=0))
+        adaln_input = t.type_as(x)  # 时间步嵌入 [1,256]
+        x[torch.cat(x_inner_pad_mask)] = self.x_pad_token  # 将图片序列pad mask为True的token替换为x_pad_token [4096,3840]
+        x = list(x.split(x_item_seqlens, dim=0))  # 将cat后的图片latent序列按图片序列长度分割成多个tensor，每个tensor对应一个样本
+        x_freqs_cis = list(self.rope_embedder(torch.cat(x_pos_ids, dim=0)).split([len(_) for _ in x_pos_ids], dim=0))  # [1,4096,64]
 
-        x = pad_sequence(x, batch_first=True, padding_value=0.0)
-        x_freqs_cis = pad_sequence(x_freqs_cis, batch_first=True, padding_value=0.0)
+        x = pad_sequence(x, batch_first=True, padding_value=0.0)  # 对图片latent序列进行padding，使其长度为x_max_item_seqlen
+        x_freqs_cis = pad_sequence(x_freqs_cis, batch_first=True, padding_value=0.0)  # 对图片序列位置编码进行padding，使其长度为x_max_item_seqlen
         # Clarify the length matches to satisfy Dynamo due to "Symbolic Shape Inference" to avoid compilation errors
-        x_freqs_cis = x_freqs_cis[:, : x.shape[1]]
+        x_freqs_cis = x_freqs_cis[:, : x.shape[1]]  # 确保图片序列位置编码长度与图片latent序列长度一致
 
-        x_attn_mask = torch.zeros((bsz, x_max_item_seqlen), dtype=torch.bool, device=device)
+        x_attn_mask = torch.zeros((bsz, x_max_item_seqlen), dtype=torch.bool, device=device)  # 创建图片序列注意力掩码 [1,4096]
         for i, seq_len in enumerate(x_item_seqlens):
             x_attn_mask[i, :seq_len] = 1
 
-        for layer in self.noise_refiner:
-            x = layer(x, x_attn_mask, x_freqs_cis, adaln_input)
+        for layer in self.noise_refiner:  # 先单独对图片latent特征序列进行细化
+            x = layer(x, x_attn_mask, x_freqs_cis, adaln_input)  # [1,4096,3840]
 
         cap_item_seqlens = [len(_) for _ in cap_feats]
         assert all(_ % SEQ_MULTI_OF == 0 for _ in cap_item_seqlens)
         cap_max_item_seqlen = max(cap_item_seqlens)
 
         cap_feats = torch.cat(cap_feats, dim=0)
-        cap_feats = self.cap_embedder(cap_feats)
-        cap_feats[torch.cat(cap_inner_pad_mask)] = self.cap_pad_token
+        cap_feats = self.cap_embedder(cap_feats)  # 文本特征序列特征维度映射到dim维度 [128,3840]
+        cap_feats[torch.cat(cap_inner_pad_mask)] = self.cap_pad_token  # 将文本特征序列pad mask为True的token替换为cap_pad_token [128,3840]
         cap_feats = list(cap_feats.split(cap_item_seqlens, dim=0))
         cap_freqs_cis = list(
             self.rope_embedder(torch.cat(cap_pos_ids, dim=0)).split([len(_) for _ in cap_pos_ids], dim=0)
-        )
+        )  # [1,128,64]
 
         cap_feats = pad_sequence(cap_feats, batch_first=True, padding_value=0.0)
         cap_freqs_cis = pad_sequence(cap_freqs_cis, batch_first=True, padding_value=0.0)
@@ -541,16 +541,16 @@ class ZImageTransformer2DModel(nn.Module):
         for i, seq_len in enumerate(cap_item_seqlens):
             cap_attn_mask[i, :seq_len] = 1
 
-        for layer in self.context_refiner:
-            cap_feats = layer(cap_feats, cap_attn_mask, cap_freqs_cis)
+        for layer in self.context_refiner:  # 再对文本特征序列进行细化
+            cap_feats = layer(cap_feats, cap_attn_mask, cap_freqs_cis)  # [1,128,3840]
 
         unified = []
         unified_freqs_cis = []
         for i in range(bsz):
-            x_len = x_item_seqlens[i]
-            cap_len = cap_item_seqlens[i]
-            unified.append(torch.cat([x[i][:x_len], cap_feats[i][:cap_len]]))
-            unified_freqs_cis.append(torch.cat([x_freqs_cis[i][:x_len], cap_freqs_cis[i][:cap_len]]))
+            x_len = x_item_seqlens[i]  # 图片序列长度
+            cap_len = cap_item_seqlens[i]  # 文本特征序列长度
+            unified.append(torch.cat([x[i][:x_len], cap_feats[i][:cap_len]]))  # 将图片序列和文本特征序列拼接在一起 [4096+128,3840]
+            unified_freqs_cis.append(torch.cat([x_freqs_cis[i][:x_len], cap_freqs_cis[i][:cap_len]]))  # 将图片序列位置编码和文本特征序列位置编码拼接在一起 [4096+128,64]
         unified_item_seqlens = [a + b for a, b in zip(cap_item_seqlens, x_item_seqlens)]
         assert unified_item_seqlens == [len(_) for _ in unified]
         unified_max_item_seqlen = max(unified_item_seqlens)
@@ -562,10 +562,10 @@ class ZImageTransformer2DModel(nn.Module):
             unified_attn_mask[i, :seq_len] = 1
 
         for layer in self.layers:
-            unified = layer(unified, unified_attn_mask, unified_freqs_cis, adaln_input)
+            unified = layer(unified, unified_attn_mask, unified_freqs_cis, adaln_input)  # [1,4224,3840]
 
-        unified = self.all_final_layer[f"{patch_size}-{f_patch_size}"](unified, adaln_input)
+        unified = self.all_final_layer[f"{patch_size}-{f_patch_size}"](unified, adaln_input)  # [1,4224,64]
         unified = list(unified.unbind(dim=0))
-        x = self.unpatchify(unified, x_size, patch_size, f_patch_size)
+        x = self.unpatchify(unified, x_size, patch_size, f_patch_size)  # 从[4224,64]还原到[16,1,128,128]，先截取序列中前面的图片部分，然后反patch化会vae隐空间
 
         return x, {}
